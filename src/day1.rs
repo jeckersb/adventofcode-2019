@@ -69,7 +69,7 @@ mod tests {
 
         #[test]
         fn input() {
-            assert_eq!(Puzzle::new(include_str!("../input/1")).solve2(), 3394032);
+            assert_eq!(Puzzle::new(include_str!("../input/1")).solve2(), 5088176);
         }
     }
 }
