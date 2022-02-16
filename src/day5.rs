@@ -26,7 +26,11 @@ impl<'a> Puzzle<'a> {
     }
 
     pub fn solve2(&self) -> i64 {
-        0
+        let mut intcode = Intcode::from(self.s);
+        intcode.set_input(VecDeque::from([5]));
+        intcode.run();
+        let mut output = intcode.take_output();
+        output.pop_front().unwrap()
     }
 }
 
@@ -48,7 +52,7 @@ mod tests {
 
         #[test]
         fn input() {
-            assert_eq!(Puzzle::new(include_str!("../input/5")).solve2(), 5741);
+            assert_eq!(Puzzle::new(include_str!("../input/5")).solve2(), 8805067);
         }
     }
 }

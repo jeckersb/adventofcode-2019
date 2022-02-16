@@ -10,9 +10,13 @@ pub struct Intcode {
 #[derive(PartialEq, Eq)]
 enum Opcode {
     Add = 1,
-    Mul = 2,
+    Multiply = 2,
     Input = 3,
     Output = 4,
+    JumpIfTrue = 5,
+    JumpIfFalse = 6,
+    LessThan = 7,
+    Equals = 8,
     Halt = 99,
 }
 
@@ -32,9 +36,13 @@ impl From<i64> for Opcode {
     fn from(n: i64) -> Self {
         match n {
             1 => Opcode::Add,
-            2 => Opcode::Mul,
+            2 => Opcode::Multiply,
             3 => Opcode::Input,
             4 => Opcode::Output,
+            5 => Opcode::JumpIfTrue,
+            6 => Opcode::JumpIfFalse,
+            7 => Opcode::LessThan,
+            8 => Opcode::Equals,
             99 => Opcode::Halt,
             other => panic!("Unknown opcode {other}"),
         }
@@ -67,7 +75,8 @@ impl From<i64> for Instruction {
         ];
 
         let len = match opcode {
-            Opcode::Add | Opcode::Mul => 4,
+            Opcode::Add | Opcode::Multiply | Opcode::LessThan | Opcode::Equals => 4,
+            Opcode::JumpIfTrue | Opcode::JumpIfFalse => 3,
             Opcode::Input | Opcode::Output => 2,
             Opcode::Halt => 1,
         };
@@ -145,8 +154,9 @@ impl Intcode {
                 };
 
                 self.data[dst] = op1 + op2;
+                self.ip += ins.len;
             }
-            Opcode::Mul => {
+            Opcode::Multiply => {
                 let op1 = match ins.p_mode[0] {
                     ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
                     ParameterMode::Immediate => self.data[self.ip + 1],
@@ -163,6 +173,7 @@ impl Intcode {
                 };
 
                 self.data[dst] = op1 * op2;
+                self.ip += ins.len;
             }
             Opcode::Input => {
                 assert!(self.input.is_some());
@@ -174,6 +185,8 @@ impl Intcode {
                     }
                     ParameterMode::Immediate => panic!("Unexpected input in immediate mode"),
                 }
+
+                self.ip += ins.len;
             }
             Opcode::Output => {
                 assert!(self.output.is_some());
@@ -190,11 +203,94 @@ impl Intcode {
                         .unwrap()
                         .push_back(self.data[self.ip + 1]),
                 }
+
+                self.ip += ins.len;
             }
+            Opcode::JumpIfTrue => {
+                let cond = match ins.p_mode[0] {
+                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
+                    ParameterMode::Immediate => self.data[self.ip + 1],
+                };
+
+                if cond != 0 {
+                    let target = match ins.p_mode[1] {
+                        ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
+                        ParameterMode::Immediate => self.data[self.ip + 2],
+                    };
+
+                    self.ip = target as usize;
+                } else {
+                    self.ip += ins.len;
+                }
+            }
+            Opcode::JumpIfFalse => {
+                let cond = match ins.p_mode[0] {
+                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
+                    ParameterMode::Immediate => self.data[self.ip + 1],
+                };
+
+                if cond == 0 {
+                    let target = match ins.p_mode[1] {
+                        ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
+                        ParameterMode::Immediate => self.data[self.ip + 2],
+                    };
+
+                    self.ip = target as usize;
+                } else {
+                    self.ip += ins.len;
+                }
+            }
+            Opcode::LessThan => {
+                let op1 = match ins.p_mode[0] {
+                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
+                    ParameterMode::Immediate => self.data[self.ip + 1],
+                };
+
+                let op2 = match ins.p_mode[1] {
+                    ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
+                    ParameterMode::Immediate => self.data[self.ip + 2],
+                };
+
+                let dst = match ins.p_mode[2] {
+                    ParameterMode::Position => self.data[self.ip + 3] as usize,
+                    ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
+                };
+
+                if op1 < op2 {
+                    self.data[dst] = 1;
+                } else {
+                    self.data[dst] = 0;
+                }
+
+                self.ip += ins.len;
+            }
+            Opcode::Equals => {
+                let op1 = match ins.p_mode[0] {
+                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
+                    ParameterMode::Immediate => self.data[self.ip + 1],
+                };
+
+                let op2 = match ins.p_mode[1] {
+                    ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
+                    ParameterMode::Immediate => self.data[self.ip + 2],
+                };
+
+                let dst = match ins.p_mode[2] {
+                    ParameterMode::Position => self.data[self.ip + 3] as usize,
+                    ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
+                };
+
+                if op1 == op2 {
+                    self.data[dst] = 1;
+                } else {
+                    self.data[dst] = 0;
+                }
+
+                self.ip += ins.len;
+            }
+
             Opcode::Halt => {}
         }
-
-        self.ip += ins.len;
     }
 
     fn next_instr(&self) -> Instruction {
@@ -243,6 +339,7 @@ mod tests {
 
         #[test]
         fn examples() {
+            // part 1
             assert_eq!(
                 Intcode::from("1002,4,3,4,33").run_and_take(),
                 vec![1002, 4, 3, 4, 99]
@@ -251,6 +348,118 @@ mod tests {
                 Intcode::from("1101,100,-1,4,0").run_and_take(),
                 vec![1101, 100, -1, 4, 99]
             );
+
+            // part 2
+
+            // 3,9,8,9,10,9,4,9,99,-1,8 - Using position mode, consider whether the input is equal to 8; output 1 (if it is) or 0 (if it is not).
+
+            let mut intcode = Intcode::from("3,9,8,9,10,9,4,9,99,-1,8");
+            intcode.set_input(VecDeque::from([8]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
+
+            let mut intcode = Intcode::from("3,9,8,9,10,9,4,9,99,-1,8");
+            intcode.set_input(VecDeque::from([42]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
+
+            // 3,9,7,9,10,9,4,9,99,-1,8 - Using position mode, consider whether the input is less than 8; output 1 (if it is) or 0 (if it is not).
+
+            let mut intcode = Intcode::from("3,9,7,9,10,9,4,9,99,-1,8");
+            intcode.set_input(VecDeque::from([7]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
+
+            let mut intcode = Intcode::from("3,9,7,9,10,9,4,9,99,-1,8");
+            intcode.set_input(VecDeque::from([42]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
+
+            // 3,3,1108,-1,8,3,4,3,99 - Using immediate mode, consider whether the input is equal to 8; output 1 (if it is) or 0 (if it is not).
+            let mut intcode = Intcode::from("3,3,1108,-1,8,3,4,3,99");
+            intcode.set_input(VecDeque::from([8]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
+
+            let mut intcode = Intcode::from("3,3,1108,-1,8,3,4,3,99");
+            intcode.set_input(VecDeque::from([42]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
+
+            // 3,3,1107,-1,8,3,4,3,99 - Using immediate mode, consider whether the input is less than 8; output 1 (if it is) or 0 (if it is not).
+            let mut intcode = Intcode::from("3,3,1107,-1,8,3,4,3,99");
+            intcode.set_input(VecDeque::from([7]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
+
+            let mut intcode = Intcode::from("3,3,1107,-1,8,3,4,3,99");
+            intcode.set_input(VecDeque::from([42]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
+
+            // Here are some jump tests that take an input, then output 0 if the input was zero or 1 if the input was non-zero:
+
+            // 3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9 (using position mode)
+            let mut intcode = Intcode::from("3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9");
+            intcode.set_input(VecDeque::from([0]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
+
+            let mut intcode = Intcode::from("3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9");
+            intcode.set_input(VecDeque::from([42]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
+
+            // 3,3,1105,-1,9,1101,0,0,12,4,12,99,1 (using immediate mode)
+            let mut intcode = Intcode::from("3,3,1105,-1,9,1101,0,0,12,4,12,99,1");
+            intcode.set_input(VecDeque::from([0]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
+
+            let mut intcode = Intcode::from("3,3,1105,-1,9,1101,0,0,12,4,12,99,1");
+            intcode.set_input(VecDeque::from([42]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
+
+            /*
+            Here's a larger example:
+
+            3,21,1008,21,8,20,1005,20,22,107,8,21,20,1006,20,31,
+            1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,
+            999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99
+
+            The above example program uses an input instruction to ask
+            for a single number. The program will then output 999 if
+            the input value is below 8, output 1000 if the input value
+            is equal to 8, or output 1001 if the input value is
+            greater than 8.
+             */
+            let mut intcode = Intcode::from(
+                "3,21,1008,21,8,20,1005,20,22,107,8,21,20,1006,20,31,\
+		 1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,\
+		 999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99",
+            );
+            intcode.set_input(VecDeque::from([7]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 999);
+
+            let mut intcode = Intcode::from(
+                "3,21,1008,21,8,20,1005,20,22,107,8,21,20,1006,20,31,\
+		 1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,\
+		 999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99",
+            );
+            intcode.set_input(VecDeque::from([8]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1000);
+
+            let mut intcode = Intcode::from(
+                "3,21,1008,21,8,20,1005,20,22,107,8,21,20,1006,20,31,\
+		 1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,\
+		 999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99",
+            );
+            intcode.set_input(VecDeque::from([9]));
+            intcode.run();
+            assert_eq!(intcode.take_output().pop_front().unwrap(), 1001);
         }
     }
 }
