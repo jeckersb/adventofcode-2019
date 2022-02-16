@@ -16,7 +16,7 @@ impl<'a> Puzzle<'a> {
 
         let modified = v.join(",");
 
-        Intcode::from(modified.as_str()).run()[0]
+        Intcode::from(modified.as_str()).run_and_take()[0]
     }
 
     pub fn solve2(&self) -> i64 {
@@ -32,7 +32,7 @@ impl<'a> Puzzle<'a> {
                 v[1] = noun;
                 v[2] = verb;
 
-                if Intcode::from(&v[..]).run()[0] == 19690720 {
+                if Intcode::from(&v[..]).run_and_take()[0] == 19690720 {
                     return 100 * noun + verb;
                 }
             }
