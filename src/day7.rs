@@ -1,5 +1,4 @@
 use itertools::Itertools;
-use std::collections::VecDeque;
 
 use crate::intcode::Intcode;
 
@@ -18,7 +17,8 @@ impl<'a> Puzzle<'a> {
         for perm in [0, 1, 2, 3, 4].iter().permutations(5) {
             let thrust = perm.iter().fold(0, |acc, phase| {
                 let mut intcode = Intcode::from(self.s);
-                intcode.set_input(VecDeque::from([**phase, acc]));
+                intcode.input(**phase);
+                intcode.input(acc);
                 intcode.run();
                 intcode.take_output().pop_front().unwrap()
             });

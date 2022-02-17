@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use crate::intcode::Intcode;
 
 pub struct Puzzle<'a> {
@@ -13,7 +11,7 @@ impl<'a> Puzzle<'a> {
 
     pub fn solve(&self) -> i64 {
         let mut intcode = Intcode::from(self.s);
-        intcode.set_input(VecDeque::from([1]));
+        intcode.input(1);
         intcode.run();
         let output = intcode.take_output();
         let mut iter = output.iter();
@@ -27,7 +25,7 @@ impl<'a> Puzzle<'a> {
 
     pub fn solve2(&self) -> i64 {
         let mut intcode = Intcode::from(self.s);
-        intcode.set_input(VecDeque::from([5]));
+        intcode.input(5);
         intcode.run();
         let mut output = intcode.take_output();
         output.pop_front().unwrap()

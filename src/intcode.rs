@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 pub struct Intcode {
     data: Vec<i64>,
     ip: usize,
-    input: Option<VecDeque<i64>>,
+    input: VecDeque<i64>,
     output: Option<VecDeque<i64>>,
 }
 
@@ -24,6 +24,13 @@ enum Opcode {
 enum ParameterMode {
     Position = 0,
     Immediate = 1,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunResult {
+    Ok,
+    Halted,
+    BlockedOnInput,
 }
 
 struct Instruction {
@@ -98,7 +105,7 @@ impl From<&str> for Intcode {
                 .map(|i| i.parse::<i64>().unwrap())
                 .collect(),
             ip: 0,
-            input: None,
+            input: VecDeque::new(),
             output: Some(VecDeque::new()),
         }
     }
@@ -109,32 +116,32 @@ impl From<&[i64]> for Intcode {
         Self {
             data: Vec::from(s),
             ip: 0,
-            input: None,
+            input: VecDeque::new(),
             output: Some(VecDeque::new()),
         }
     }
 }
 
 impl Intcode {
-    pub fn set_input(&mut self, input: VecDeque<i64>) {
-        self.input = Some(input);
+    pub fn input(&mut self, input: i64) {
+        self.input.push_back(input);
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> RunResult {
         loop {
-            match self.next_instr() {
-                Instruction { opcode, .. } if opcode == Opcode::Halt => break,
-                _ => self.next(),
+            match self.next() {
+                RunResult::Ok => continue,
+                other => return other,
             }
         }
     }
 
     pub fn run_and_take(mut self) -> Vec<i64> {
-        self.run();
+        assert_eq!(self.run(), RunResult::Halted);
         self.data
     }
 
-    fn next(&mut self) {
+    fn next(&mut self) -> RunResult {
         let ins = self.next_instr();
         match ins.opcode {
             Opcode::Add => {
@@ -176,12 +183,14 @@ impl Intcode {
                 self.ip += ins.len;
             }
             Opcode::Input => {
-                assert!(self.input.is_some());
-
                 match ins.p_mode[0] {
                     ParameterMode::Position => {
                         let idx = self.data[self.ip + 1] as usize;
-                        self.data[idx] = self.input.as_mut().unwrap().pop_front().unwrap()
+
+                        match self.input.pop_front() {
+                            Some(i) => self.data[idx] = i,
+                            None => return RunResult::BlockedOnInput,
+                        }
                     }
                     ParameterMode::Immediate => panic!("Unexpected input in immediate mode"),
                 }
@@ -289,8 +298,10 @@ impl Intcode {
                 self.ip += ins.len;
             }
 
-            Opcode::Halt => {}
+            Opcode::Halt => return RunResult::Halted,
         }
+
+        RunResult::Ok
     }
 
     fn next_instr(&self) -> Instruction {
@@ -354,46 +365,46 @@ mod tests {
             // 3,9,8,9,10,9,4,9,99,-1,8 - Using position mode, consider whether the input is equal to 8; output 1 (if it is) or 0 (if it is not).
 
             let mut intcode = Intcode::from("3,9,8,9,10,9,4,9,99,-1,8");
-            intcode.set_input(VecDeque::from([8]));
+            intcode.input(8);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
 
             let mut intcode = Intcode::from("3,9,8,9,10,9,4,9,99,-1,8");
-            intcode.set_input(VecDeque::from([42]));
+            intcode.input(42);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
 
             // 3,9,7,9,10,9,4,9,99,-1,8 - Using position mode, consider whether the input is less than 8; output 1 (if it is) or 0 (if it is not).
 
             let mut intcode = Intcode::from("3,9,7,9,10,9,4,9,99,-1,8");
-            intcode.set_input(VecDeque::from([7]));
+            intcode.input(7);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
 
             let mut intcode = Intcode::from("3,9,7,9,10,9,4,9,99,-1,8");
-            intcode.set_input(VecDeque::from([42]));
+            intcode.input(42);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
 
             // 3,3,1108,-1,8,3,4,3,99 - Using immediate mode, consider whether the input is equal to 8; output 1 (if it is) or 0 (if it is not).
             let mut intcode = Intcode::from("3,3,1108,-1,8,3,4,3,99");
-            intcode.set_input(VecDeque::from([8]));
+            intcode.input(8);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
 
             let mut intcode = Intcode::from("3,3,1108,-1,8,3,4,3,99");
-            intcode.set_input(VecDeque::from([42]));
+            intcode.input(42);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
 
             // 3,3,1107,-1,8,3,4,3,99 - Using immediate mode, consider whether the input is less than 8; output 1 (if it is) or 0 (if it is not).
             let mut intcode = Intcode::from("3,3,1107,-1,8,3,4,3,99");
-            intcode.set_input(VecDeque::from([7]));
+            intcode.input(7);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
 
             let mut intcode = Intcode::from("3,3,1107,-1,8,3,4,3,99");
-            intcode.set_input(VecDeque::from([42]));
+            intcode.input(42);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
 
@@ -401,23 +412,23 @@ mod tests {
 
             // 3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9 (using position mode)
             let mut intcode = Intcode::from("3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9");
-            intcode.set_input(VecDeque::from([0]));
+            intcode.input(0);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
 
             let mut intcode = Intcode::from("3,12,6,12,15,1,13,14,13,4,13,99,-1,0,1,9");
-            intcode.set_input(VecDeque::from([42]));
+            intcode.input(42);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
 
             // 3,3,1105,-1,9,1101,0,0,12,4,12,99,1 (using immediate mode)
             let mut intcode = Intcode::from("3,3,1105,-1,9,1101,0,0,12,4,12,99,1");
-            intcode.set_input(VecDeque::from([0]));
+            intcode.input(0);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 0);
 
             let mut intcode = Intcode::from("3,3,1105,-1,9,1101,0,0,12,4,12,99,1");
-            intcode.set_input(VecDeque::from([42]));
+            intcode.input(42);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1);
 
@@ -439,7 +450,7 @@ mod tests {
 		 1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,\
 		 999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99",
             );
-            intcode.set_input(VecDeque::from([7]));
+            intcode.input(7);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 999);
 
@@ -448,7 +459,7 @@ mod tests {
 		 1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,\
 		 999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99",
             );
-            intcode.set_input(VecDeque::from([8]));
+            intcode.input(8);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1000);
 
@@ -457,7 +468,7 @@ mod tests {
 		 1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,\
 		 999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99",
             );
-            intcode.set_input(VecDeque::from([9]));
+            intcode.input(9);
             intcode.run();
             assert_eq!(intcode.take_output().pop_front().unwrap(), 1001);
         }
