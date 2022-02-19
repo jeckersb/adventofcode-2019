@@ -13,22 +13,21 @@ impl<'a> Puzzle<'a> {
         let mut intcode = Intcode::from(self.s);
         intcode.input(1);
         intcode.run();
-        let output = intcode.take_output();
-        let mut iter = output.iter();
 
-        for _ in 0..output.len() - 1 {
-            assert_eq!(*iter.next().unwrap(), 0);
+        loop {
+            match intcode.output() {
+                Some(0) => continue,
+                Some(n) => break n,
+                None => panic!("unexpected end of output"),
+            }
         }
-
-        *iter.next().unwrap()
     }
 
     pub fn solve2(&self) -> i64 {
         let mut intcode = Intcode::from(self.s);
         intcode.input(5);
         intcode.run();
-        let mut output = intcode.take_output();
-        output.pop_front().unwrap()
+        intcode.output().unwrap()
     }
 }
 
