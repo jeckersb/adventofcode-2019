@@ -1,11 +1,14 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 pub struct Intcode {
-    data: Vec<i64>,
+    memory: Memory,
     ip: usize,
+    rb: isize,
     input: VecDeque<i64>,
     output: VecDeque<i64>,
 }
+
+struct Memory(HashMap<usize, i64>);
 
 #[derive(PartialEq, Eq)]
 enum Opcode {
@@ -20,10 +23,11 @@ enum Opcode {
     Halt = 99,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Copy, Clone)]
 enum ParameterMode {
     Position = 0,
     Immediate = 1,
+    Relative = 2,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -61,6 +65,7 @@ impl From<i64> for ParameterMode {
         match n {
             0 => ParameterMode::Position,
             1 => ParameterMode::Immediate,
+            2 => ParameterMode::Relative,
             other => panic!("Unknown parameter mode {other}"),
         }
     }
@@ -99,12 +104,9 @@ impl From<i64> for Instruction {
 impl From<&str> for Intcode {
     fn from(s: &str) -> Self {
         Self {
-            data: s
-                .trim()
-                .split(',')
-                .map(|i| i.parse::<i64>().unwrap())
-                .collect(),
+            memory: Memory::from(s),
             ip: 0,
+            rb: 0,
             input: VecDeque::new(),
             output: VecDeque::new(),
         }
@@ -114,11 +116,31 @@ impl From<&str> for Intcode {
 impl From<&[i64]> for Intcode {
     fn from(s: &[i64]) -> Self {
         Self {
-            data: Vec::from(s),
+            memory: Memory::from(s),
             ip: 0,
+            rb: 0,
             input: VecDeque::new(),
             output: VecDeque::new(),
         }
+    }
+}
+
+impl From<&str> for Memory {
+    fn from(s: &str) -> Self {
+        let map = s
+            .trim()
+            .split(',')
+            .map(|i| i.parse::<i64>().unwrap())
+            .enumerate()
+            .collect();
+
+        Self(map)
+    }
+}
+
+impl From<&[i64]> for Memory {
+    fn from(s: &[i64]) -> Self {
+        Self(s.iter().map(|i| *i).enumerate().collect())
     }
 }
 
@@ -140,157 +162,113 @@ impl Intcode {
         }
     }
 
-    pub fn run_and_take(mut self) -> Vec<i64> {
-        assert_eq!(self.run(), RunResult::Halted);
-        self.data
+    pub fn get_mem_range(&self, start: usize, end: usize) -> Vec<i64> {
+        (start..end).map(|i| self.mem_get_addr(i)).collect()
     }
 
     fn next(&mut self) -> RunResult {
         let ins = self.next_instr();
         match ins.opcode {
             Opcode::Add => {
-                let op1 = match ins.p_mode[0] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 1],
-                };
-
-                let op2 = match ins.p_mode[1] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 2],
-                };
+                let op1 = self.mem_get(ins.p_mode[0], 1);
+                let op2 = self.mem_get(ins.p_mode[1], 2);
 
                 let dst = match ins.p_mode[2] {
-                    ParameterMode::Position => self.data[self.ip + 3] as usize,
+                    ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3),
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
+                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
                 };
 
-                self.data[dst] = op1 + op2;
+                self.mem_set(dst as usize, op1 + op2);
                 self.ip += ins.len;
             }
             Opcode::Multiply => {
-                let op1 = match ins.p_mode[0] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 1],
-                };
-
-                let op2 = match ins.p_mode[1] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 2],
-                };
+                let op1 = self.mem_get(ins.p_mode[0], 1);
+                let op2 = self.mem_get(ins.p_mode[1], 2);
 
                 let dst = match ins.p_mode[2] {
-                    ParameterMode::Position => self.data[self.ip + 3] as usize,
+                    ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3),
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
+                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
                 };
 
-                self.data[dst] = op1 * op2;
+                self.mem_set(dst as usize, op1 * op2);
                 self.ip += ins.len;
             }
             Opcode::Input => {
                 match ins.p_mode[0] {
                     ParameterMode::Position => {
-                        let idx = self.data[self.ip + 1] as usize;
+                        let idx = self.mem_get(ParameterMode::Immediate, 1) as usize;
 
                         match self.input.pop_front() {
-                            Some(i) => self.data[idx] = i,
+                            Some(i) => self.mem_set(idx, i),
                             None => return RunResult::BlockedOnInput,
                         }
                     }
                     ParameterMode::Immediate => panic!("Unexpected input in immediate mode"),
+                    ParameterMode::Relative => panic!("Unexpected input in relative mode"),
                 }
 
                 self.ip += ins.len;
             }
             Opcode::Output => {
-                match ins.p_mode[0] {
-                    ParameterMode::Position => {
-                        let idx = self.data[self.ip + 1] as usize;
-
-                        self.output.push_back(self.data[idx]);
-                    }
-                    ParameterMode::Immediate => self.output.push_back(self.data[self.ip + 1]),
-                }
+                let op = self.mem_get(ins.p_mode[0], 1);
+                self.output.push_back(op);
 
                 self.ip += ins.len;
             }
             Opcode::JumpIfTrue => {
-                let cond = match ins.p_mode[0] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 1],
-                };
+                let cond = self.mem_get(ins.p_mode[0], 1);
 
                 if cond != 0 {
-                    let target = match ins.p_mode[1] {
-                        ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
-                        ParameterMode::Immediate => self.data[self.ip + 2],
-                    };
-
+                    let target = self.mem_get(ins.p_mode[1], 2);
                     self.ip = target as usize;
                 } else {
                     self.ip += ins.len;
                 }
             }
             Opcode::JumpIfFalse => {
-                let cond = match ins.p_mode[0] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 1],
-                };
+                let cond = self.mem_get(ins.p_mode[0], 1);
 
                 if cond == 0 {
-                    let target = match ins.p_mode[1] {
-                        ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
-                        ParameterMode::Immediate => self.data[self.ip + 2],
-                    };
-
+                    let target = self.mem_get(ins.p_mode[1], 2);
                     self.ip = target as usize;
                 } else {
                     self.ip += ins.len;
                 }
             }
             Opcode::LessThan => {
-                let op1 = match ins.p_mode[0] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 1],
-                };
-
-                let op2 = match ins.p_mode[1] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 2],
-                };
+                let op1 = self.mem_get(ins.p_mode[0], 1);
+                let op2 = self.mem_get(ins.p_mode[1], 2);
 
                 let dst = match ins.p_mode[2] {
-                    ParameterMode::Position => self.data[self.ip + 3] as usize,
+                    ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3) as usize,
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
+                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
                 };
 
                 if op1 < op2 {
-                    self.data[dst] = 1;
+                    self.mem_set(dst, 1);
                 } else {
-                    self.data[dst] = 0;
+                    self.mem_set(dst, 0);
                 }
 
                 self.ip += ins.len;
             }
             Opcode::Equals => {
-                let op1 = match ins.p_mode[0] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 1] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 1],
-                };
-
-                let op2 = match ins.p_mode[1] {
-                    ParameterMode::Position => self.data[self.data[self.ip + 2] as usize],
-                    ParameterMode::Immediate => self.data[self.ip + 2],
-                };
+                let op1 = self.mem_get(ins.p_mode[0], 1);
+                let op2 = self.mem_get(ins.p_mode[1], 2);
 
                 let dst = match ins.p_mode[2] {
-                    ParameterMode::Position => self.data[self.ip + 3] as usize,
+                    ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3) as usize,
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
+                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
                 };
 
                 if op1 == op2 {
-                    self.data[dst] = 1;
+                    self.mem_set(dst, 1);
                 } else {
-                    self.data[dst] = 0;
+                    self.mem_set(dst, 0);
                 }
 
                 self.ip += ins.len;
@@ -303,7 +281,45 @@ impl Intcode {
     }
 
     fn next_instr(&self) -> Instruction {
-        Instruction::from(self.data[self.ip])
+        Instruction::from(self.mem_get(ParameterMode::Immediate, 0))
+    }
+
+    fn mem_get(&self, mode: ParameterMode, offset: usize) -> i64 {
+        self.memory.get(&self.ip, &self.rb, mode, offset)
+    }
+
+    fn mem_get_addr(&self, addr: usize) -> i64 {
+        self.memory.get_addr(addr)
+    }
+
+    fn mem_set(&mut self, addr: usize, val: i64) {
+        self.memory.set(addr, val)
+    }
+}
+
+impl Memory {
+    fn get(&self, ip: &usize, rb: &isize, mode: ParameterMode, offset: usize) -> i64 {
+        match mode {
+            ParameterMode::Position => {
+                let pos = self.get_addr(*ip + offset);
+                self.get_addr(pos as usize)
+            }
+            ParameterMode::Immediate => self.get_addr(*ip + offset),
+            ParameterMode::Relative => {
+                self.get_addr((*ip as isize + offset as isize + *rb) as usize)
+            }
+        }
+    }
+
+    fn get_addr(&self, addr: usize) -> i64 {
+        match self.0.get(&addr) {
+            None => 0,
+            Some(n) => *n,
+        }
+    }
+
+    fn set(&mut self, addr: usize, val: i64) {
+        self.0.insert(addr, val);
     }
 }
 
@@ -316,24 +332,29 @@ mod tests {
 
         #[test]
         fn examples() {
+            let mut intcode = Intcode::from("1,9,10,3,2,3,11,0,99,30,40,50");
+            intcode.run();
             assert_eq!(
-                Intcode::from("1,9,10,3,2,3,11,0,99,30,40,50").run_and_take(),
+                intcode.get_mem_range(0, 12),
                 vec![3500, 9, 10, 70, 2, 3, 11, 0, 99, 30, 40, 50]
             );
+
+            let mut intcode = Intcode::from("1,0,0,0,99");
+            intcode.run();
+            assert_eq!(intcode.get_mem_range(0, 5), vec![2, 0, 0, 0, 99]);
+
+            let mut intcode = Intcode::from("2,3,0,3,99");
+            intcode.run();
+            assert_eq!(intcode.get_mem_range(0, 5), vec![2, 3, 0, 6, 99]);
+
+            let mut intcode = Intcode::from("2,4,4,5,99,0");
+            intcode.run();
+            assert_eq!(intcode.get_mem_range(0, 6), vec![2, 4, 4, 5, 99, 9801]);
+
+            let mut intcode = Intcode::from("1,1,1,4,99,5,6,0,99");
+            intcode.run();
             assert_eq!(
-                Intcode::from("1,0,0,0,99").run_and_take(),
-                vec![2, 0, 0, 0, 99]
-            );
-            assert_eq!(
-                Intcode::from("2,3,0,3,99").run_and_take(),
-                vec![2, 3, 0, 6, 99]
-            );
-            assert_eq!(
-                Intcode::from("2,4,4,5,99,0").run_and_take(),
-                vec![2, 4, 4, 5, 99, 9801]
-            );
-            assert_eq!(
-                Intcode::from("1,1,1,4,99,5,6,0,99").run_and_take(),
+                intcode.get_mem_range(0, 9),
                 vec![30, 1, 1, 4, 2, 5, 6, 0, 99]
             );
         }
@@ -345,14 +366,13 @@ mod tests {
         #[test]
         fn examples() {
             // part 1
-            assert_eq!(
-                Intcode::from("1002,4,3,4,33").run_and_take(),
-                vec![1002, 4, 3, 4, 99]
-            );
-            assert_eq!(
-                Intcode::from("1101,100,-1,4,0").run_and_take(),
-                vec![1101, 100, -1, 4, 99]
-            );
+            let mut intcode = Intcode::from("1002,4,3,4,33");
+            intcode.run();
+            assert_eq!(intcode.get_mem_range(0, 5), vec![1002, 4, 3, 4, 99]);
+
+            let mut intcode = Intcode::from("1101,100,-1,4,0");
+            intcode.run();
+            assert_eq!(intcode.get_mem_range(0, 5), vec![1101, 100, -1, 4, 99]);
 
             // part 2
 

@@ -16,7 +16,9 @@ impl<'a> Puzzle<'a> {
 
         let modified = v.join(",");
 
-        Intcode::from(modified.as_str()).run_and_take()[0]
+        let mut intcode = Intcode::from(modified.as_str());
+        intcode.run();
+        intcode.get_mem_range(0, 1)[0]
     }
 
     pub fn solve2(&self) -> i64 {
@@ -32,7 +34,10 @@ impl<'a> Puzzle<'a> {
                 v[1] = noun;
                 v[2] = verb;
 
-                if Intcode::from(&v[..]).run_and_take()[0] == 19690720 {
+                let mut intcode = Intcode::from(&v[..]);
+                intcode.run();
+                let first_byte = intcode.get_mem_range(0, 1)[0];
+                if first_byte == 19690720 {
                     return 100 * noun + verb;
                 }
             }
