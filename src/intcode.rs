@@ -20,10 +20,11 @@ enum Opcode {
     JumpIfFalse = 6,
     LessThan = 7,
     Equals = 8,
+    RelativeBase = 9,
     Halt = 99,
 }
 
-#[derive(PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum ParameterMode {
     Position = 0,
     Immediate = 1,
@@ -54,6 +55,7 @@ impl From<i64> for Opcode {
             6 => Opcode::JumpIfFalse,
             7 => Opcode::LessThan,
             8 => Opcode::Equals,
+            9 => Opcode::RelativeBase,
             99 => Opcode::Halt,
             other => panic!("Unknown opcode {other}"),
         }
@@ -89,7 +91,7 @@ impl From<i64> for Instruction {
         let len = match opcode {
             Opcode::Add | Opcode::Multiply | Opcode::LessThan | Opcode::Equals => 4,
             Opcode::JumpIfTrue | Opcode::JumpIfFalse => 3,
-            Opcode::Input | Opcode::Output => 2,
+            Opcode::Input | Opcode::Output | Opcode::RelativeBase => 2,
             Opcode::Halt => 1,
         };
 
@@ -176,7 +178,10 @@ impl Intcode {
                 let dst = match ins.p_mode[2] {
                     ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3),
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
-                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
+                    ParameterMode::Relative => (self.mem_get(ParameterMode::Immediate, 3) as isize
+                        + self.rb)
+                        .try_into()
+                        .unwrap(),
                 };
 
                 self.mem_set(dst as usize, op1 + op2);
@@ -189,7 +194,10 @@ impl Intcode {
                 let dst = match ins.p_mode[2] {
                     ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3),
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
-                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
+                    ParameterMode::Relative => (self.mem_get(ParameterMode::Immediate, 3) as isize
+                        + self.rb)
+                        .try_into()
+                        .unwrap(),
                 };
 
                 self.mem_set(dst as usize, op1 * op2);
@@ -206,7 +214,13 @@ impl Intcode {
                         }
                     }
                     ParameterMode::Immediate => panic!("Unexpected input in immediate mode"),
-                    ParameterMode::Relative => panic!("Unexpected input in relative mode"),
+                    ParameterMode::Relative => {
+                        let idx = self.mem_get(ParameterMode::Immediate, 1) as isize;
+                        match self.input.pop_front() {
+                            Some(i) => self.mem_set((self.rb + idx).try_into().unwrap(), i),
+                            None => return RunResult::BlockedOnInput,
+                        }
+                    }
                 }
 
                 self.ip += ins.len;
@@ -244,7 +258,10 @@ impl Intcode {
                 let dst = match ins.p_mode[2] {
                     ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3) as usize,
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
-                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
+                    ParameterMode::Relative => (self.mem_get(ParameterMode::Immediate, 3) as isize
+                        + self.rb)
+                        .try_into()
+                        .unwrap(),
                 };
 
                 if op1 < op2 {
@@ -262,7 +279,10 @@ impl Intcode {
                 let dst = match ins.p_mode[2] {
                     ParameterMode::Position => self.mem_get(ParameterMode::Immediate, 3) as usize,
                     ParameterMode::Immediate => panic!("Unexpected write in immediate mode"),
-                    ParameterMode::Relative => panic!("Unexpected write in relative mode"),
+                    ParameterMode::Relative => (self.mem_get(ParameterMode::Immediate, 3) as isize
+                        + self.rb)
+                        .try_into()
+                        .unwrap(),
                 };
 
                 if op1 == op2 {
@@ -273,7 +293,11 @@ impl Intcode {
 
                 self.ip += ins.len;
             }
-
+            Opcode::RelativeBase => {
+                let op = self.mem_get(ins.p_mode[0], 1);
+                self.rb += op as isize;
+                self.ip += ins.len;
+            }
             Opcode::Halt => return RunResult::Halted,
         }
 
@@ -306,7 +330,8 @@ impl Memory {
             }
             ParameterMode::Immediate => self.get_addr(*ip + offset),
             ParameterMode::Relative => {
-                self.get_addr((*ip as isize + offset as isize + *rb) as usize)
+                let op = self.get_addr(*ip + offset);
+                self.get_addr((*rb + op as isize).try_into().unwrap())
             }
         }
     }
@@ -485,6 +510,38 @@ mod tests {
             intcode.input(9);
             intcode.run();
             assert_eq!(intcode.output().unwrap(), 1001);
+        }
+    }
+
+    mod day9 {
+        use super::*;
+
+        #[test]
+        fn examples() {
+            // part 1
+
+            // 109,1,204,-1,1001,100,1,100,1008,100,16,101,1006,101,0,99 takes no input and produces a copy of itself as output.
+            let mut intcode =
+                Intcode::from("109,1,204,-1,1001,100,1,100,1008,100,16,101,1006,101,0,99");
+            intcode.run();
+            let mut outputs = Vec::with_capacity(16);
+            for _ in 0..16 {
+                outputs.push(intcode.output().unwrap());
+            }
+            assert_eq!(
+                outputs,
+                vec![109, 1, 204, -1, 1001, 100, 1, 100, 1008, 100, 16, 101, 1006, 101, 0, 99]
+            );
+
+            // 1102,34915192,34915192,7,4,7,99,0 should output a 16-digit number.
+            let mut intcode = Intcode::from("1102,34915192,34915192,7,4,7,99,0");
+            intcode.run();
+            assert_eq!(intcode.output().unwrap().to_string().len(), 16);
+
+            // 104,1125899906842624,99 should output the large number in the middle.
+            let mut intcode = Intcode::from("104,1125899906842624,99");
+            intcode.run();
+            assert_eq!(intcode.output().unwrap(), 1125899906842624);
         }
     }
 }
